@@ -92,18 +92,99 @@ class KeywordDataset(Dataset):
         return x.float(), torch.tensor(y, dtype=torch.long)
     
 
-def make_df(dataset_folder_path: str) -> pd.DataFrame:
-    pos_dir = Path(dataset_folder_path) / "positive"
-    neg_dir = Path(dataset_folder_path) / "negative"
+import sqlite3
+import re
+from typing import Optional, Sequence
 
-    pos_files = sorted([p for p in pos_dir.iterdir() if p.is_file()])
-    neg_files = sorted([p for p in neg_dir.iterdir() if p.is_file()])
+def _norm_text_db(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
-    data_pos = [[str(p), 1] for p in pos_files]
-    data_neg = [[str(p), 0] for p in neg_files]
+def make_df_from_db(
+    db_path: str,
+    phrase: str,
+    *,
+    limit_pos: Optional[int] = None,
+    limit_neg: Optional[int] = None,
+    engines: Optional[Sequence[str]] = None,    # e.g. ["piper","coqui","eleven"]
+    langs: Optional[Sequence[str]] = None,      # e.g. ["en","pl"]
+    min_dur_s: float = 0.25,
+    max_dur_s: float = 10.0,
+) -> pd.DataFrame:
+    phrase_norm = _norm_text_db(phrase)
+    con = sqlite3.connect(db_path)
 
-    df = pd.DataFrame(data_pos + data_neg, columns=["path", "label"])
+    # Build optional filters
+    where_extra = []
+    params_pos = [phrase_norm, min_dur_s, max_dur_s]
+    params_neg = [phrase_norm, min_dur_s, max_dur_s, phrase_norm]  # last is for FTS
+
+    if engines:
+        placeholders = ",".join(["?"] * len(engines))
+        where_extra.append(f"engine IN ({placeholders})")
+        params_pos.extend(engines)
+        params_neg.extend(engines)
+    if langs:
+        placeholders = ",".join(["?"] * len(langs))
+        where_extra.append(f"(lang IN ({placeholders}) OR lang IS NULL)")
+        params_pos.extend(langs)
+        params_neg.extend(langs)
+
+    where_tail = (" AND " + " AND ".join(where_extra)) if where_extra else ""
+
+    # Positives: exact normalized match
+    q_pos = f"""
+    SELECT path, 1 AS label
+    FROM clips
+    WHERE text_normalized = ?
+      AND duration_s BETWEEN ? AND ?
+      {where_tail}
+    ORDER BY created_at DESC
+    """
+    if limit_pos:
+        q_pos += f" LIMIT {int(limit_pos)}"
+
+    pos = pd.read_sql_query(q_pos, con, params=params_pos)
+
+    # Negatives: exclude any row containing the phrase tokens
+    # Prefer FTS; fallback to LIKE if FTS not available
+    try:
+        q_neg = f"""
+        SELECT path, 0 AS label
+        FROM clips
+        WHERE text_normalized != ?
+          AND duration_s BETWEEN ? AND ?
+          AND rowid NOT IN (
+            SELECT rowid FROM clips_fts WHERE text_normalized MATCH ?
+          )
+          {where_tail}
+        ORDER BY created_at DESC
+        """
+        if limit_neg:
+            q_neg += f" LIMIT {int(limit_neg)}"
+        neg = pd.read_sql_query(q_neg, con, params=params_neg)
+    except Exception:
+        like = f"%{phrase_norm}%"
+        params_neg_like = [phrase_norm, min_dur_s, max_dur_s, like]
+        if engines: params_neg_like.extend(engines)
+        if langs: params_neg_like.extend(langs)
+        q_neg_like = f"""
+        SELECT path, 0 AS label
+        FROM clips
+        WHERE text_normalized != ?
+          AND duration_s BETWEEN ? AND ?
+          AND text_normalized NOT LIKE ?
+          {where_tail}
+        ORDER BY created_at DESC
+        """
+        if limit_neg:
+            q_neg_like += f" LIMIT {int(limit_neg)}"
+        neg = pd.read_sql_query(q_neg_like, con, params=params_neg_like)
+
+    con.close()
+
+    df = pd.concat([pos, neg], ignore_index=True)
     df["label"] = df["label"].astype(int)
-    df = df.sort_values(["label", "path"], kind="mergesort", ignore_index=True)
+    df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)  # shuffle
     return df
-

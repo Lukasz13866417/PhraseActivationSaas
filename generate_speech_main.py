@@ -370,7 +370,6 @@ def db_model_from_path(p: Path) -> str:
     return "model"
 
 def db_voice_from_path(p: Path) -> str:
-    # best-effort voice tag
     name = p.name
     m = re.search(r"piper_([^_]+)", name)
     if m: return m.group(1)

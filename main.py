@@ -9,7 +9,7 @@ from augmentation import *
 import torch
 import torch.nn.functional as F
 
-TARGET_T = 200  # ~2.0 s / 10 ms hops
+TARGET_T = 200  
 
 def collate_fixed_time(batch):
     xs, ys = zip(*batch)  # xs: list of [1, n_mels, T_i]
@@ -32,8 +32,8 @@ def train_one_epoch(model, loader, optimizer, scaler, device):
     model.train()
     loss_meter = 0.0
     for x, y in loader:
-        x = x.to(device)                   # x: (B,1,40,T)
-        y = y.float().to(device)           # y: (B,)
+        x = x.to(device)                  
+        y = y.float().to(device)         
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")):
             logits, _ = model(x)
@@ -86,7 +86,7 @@ def eval_with_threshold(model, loader, device):
     return loss_meter/len(loader.dataset), auc, th_opt, acc
 
 # 1) Build data
-df = make_df("./dataset2")                            # your helper
+df = make_df_from_db("db/tts.sqlite", "hello", limit_pos=1000, limit_neg=3000)                        
 # split (super simple): last 10% as val
 val_frac = 0.1
 cut = int(len(df)*(1-val_frac))
@@ -94,8 +94,8 @@ df_train, df_val = train_test_split(
     df, test_size=0.1, stratify=df["label"], random_state=42
 )
 
-cfg = SpectrogramConfig(mean_db=-13.2, std_db=7.8)   # put your stats
-ds_train = KeywordDataset(df=df_train, cfg=cfg, augment=simple_augment)  # or None
+cfg = SpectrogramConfig(mean_db=-13.2, std_db=7.8)  
+ds_train = KeywordDataset(df=df_train, cfg=cfg, augment=simple_augment)  
 ds_val   = KeywordDataset(df=df_val,   cfg=cfg, augment=None)
 
 train_loader = DataLoader(ds_train, batch_size=32, shuffle=True,
@@ -105,16 +105,14 @@ val_loader   = DataLoader(ds_val, batch_size=64, shuffle=False,
                           num_workers=16, pin_memory=True,
                           collate_fn=collate_fixed_time)
 
-# 2) Model/opt
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = TinyCRNN(in_ch=1, n_mels=cfg.n_mels, hidden=128).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 scaler = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 
-# 3) Train loop with basic early stopping
 best_val = float("inf"); best_path = "kw_model.pt"
 for epoch in range(1, 2000):
-    ds_train.set_epoch(epoch)              # for deterministic aug (if you added this)
+    ds_train.set_epoch(epoch)            
     t0 = time.time()
     tr_loss = train_one_epoch(model, train_loader, opt, scaler, device)
     va_loss, va_auc, th_opt, va_acc_opt = eval_with_threshold(model, val_loader, device)
@@ -122,9 +120,8 @@ for epoch in range(1, 2000):
     if va_loss < best_val:
         best_val = va_loss
         torch.save({"model": model.state_dict(), "cfg": cfg.__dict__}, best_path)
-        # optional: patience counter etc.
 
-# 4) Load best and use
+
 ckpt = torch.load(best_path, map_location="cpu")
 model.load_state_dict(ckpt["model"])
 model.eval()
