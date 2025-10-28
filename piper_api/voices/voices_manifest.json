@@ -1,0 +1,29 @@
+{
+  "voices": {
+    "en_GB/alan/low": {
+      "lang": "en",
+      "locale": "en_GB",
+      "voice": "alan",
+      "quality": "low",
+      "onnx": "/home/luke/Desktop/ML/PhraseActivation/PhraseActivationSaas/piper_api/voices/en/en_GB/alan/low/en_GB-alan-low.onnx",
+      "json": "/home/luke/Desktop/ML/PhraseActivation/PhraseActivationSaas/piper_api/voices/en/en_GB/alan/low/en_GB-alan-low.onnx.json"
+    },
+    "en_GB/alan/medium": {
+      "lang": "en",
+      "locale": "en_GB",
+      "voice": "alan",
+      "quality": "medium",
+      "onnx": "/home/luke/Desktop/ML/PhraseActivation/PhraseActivationSaas/piper_api/voices/en/en_GB/alan/medium/en_GB-alan-medium.onnx",
+      "json": "/home/luke/Desktop/ML/PhraseActivation/PhraseActivationSaas/piper_api/voices/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json"
+    },
+    "en_GB/alba/medium": {
+      "lang": "en",
+      "locale": "en_GB",
+      "voice": "alba",
+      "quality": "medium",
+      "onnx": "/home/luke/Desktop/ML/PhraseActivation/PhraseActivationSaas/piper_api/voices/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
+      "json": "/home/luke/Desktop/ML/PhraseActivation/PhraseActivationSaas/piper_api/voices/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json"
+    }
+  },
+  "updated": 1761609268
+}
