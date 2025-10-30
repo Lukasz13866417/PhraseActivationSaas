@@ -26,4 +26,4 @@ class TinyCRNN(nn.Module):
         y = self.drop(y)                  
         logits_t = self.frame_head(y).squeeze(-1)   # (B,T)
         window_logit = self.temporal_pool(logits_t) # (B,)
-        return window_logit, logits_t              # return logit (not sigmoid)
+        return window_logit, logits_t              # return logit 

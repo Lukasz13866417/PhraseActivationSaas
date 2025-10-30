@@ -2,6 +2,7 @@ from __future__ import annotations
 import re
 import wave
 from dataclasses import dataclass
+import time
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
@@ -15,6 +16,7 @@ HF_REPO = "rhasspy/piper-voices"  # official Piper voices repository on the Hub
 
 HERE = Path(__file__).parent
 DEFAULT_VOICE_DIR = HERE / "voices"   # <piper_api>/voices
+_VOICE_OBJ_CACHE: dict[tuple[str, str], PiperVoice] = {}
 
 # Voice files live at:
 #   <lang>/<locale>/<voice>/<quality>/<id>.onnx
@@ -99,31 +101,65 @@ def download_voice(
     v: VoiceEntry,
     local_dir: Path | str = DEFAULT_VOICE_DIR,
     revision: str = "main",
+    *,
+    timeout: float | None = 30.0,
+    retries: int = 2,
 ) -> Tuple[Path, Path]:
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
 
-    onnx_local = hf_hub_download(
-        repo_id=HF_REPO,
-        filename=v.onnx_path,
-        revision=revision,
-        local_dir=local_dir,          # <- no local_dir_use_symlinks
-    )
-    json_local = hf_hub_download(
-        repo_id=HF_REPO,
-        filename=v.json_path,
-        revision=revision,
-        local_dir=local_dir,          # <- no local_dir_use_symlinks
-    )
-    return Path(onnx_local), Path(json_local)
+    # If files already exist locally, return immediately without network
+    expected_onnx = local_dir / v.onnx_path
+    expected_json = local_dir / v.json_path
+    if expected_onnx.exists() and expected_json.exists():
+        return expected_onnx, expected_json
+
+    last_err: Exception | None = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            onnx_local = hf_hub_download(
+                repo_id=HF_REPO,
+                filename=v.onnx_path,
+                revision=revision,
+                local_dir=local_dir,
+                timeout=timeout,
+            )
+            json_local = hf_hub_download(
+                repo_id=HF_REPO,
+                filename=v.json_path,
+                revision=revision,
+                local_dir=local_dir,
+                timeout=timeout,
+            )
+            return Path(onnx_local), Path(json_local)
+        except Exception as e:
+            last_err = e
+            if attempt >= max(1, retries):
+                raise
+            # simple backoff
+            import time as _time
+            _time.sleep(1.5 * attempt)
+
+    # Should not reach here
+    assert last_err is not None
+    raise last_err
 
 
 def load_voice(
     v: VoiceEntry,
-    local_dir: Path | str = DEFAULT_VOICE_DIR
+    local_dir: Path | str = DEFAULT_VOICE_DIR,
+    *,
+    timeout: float | None = 30.0,
+    retries: int = 2,
 ) -> PiperVoice:
-    onnx_fp, json_fp = download_voice(v, local_dir=local_dir)
-    return PiperVoice.load(model_path=str(onnx_fp), config_path=str(json_fp))
+    onnx_fp, json_fp = download_voice(v, local_dir=local_dir, timeout=timeout, retries=retries)
+    key = (str(onnx_fp), str(json_fp))
+    cached = _VOICE_OBJ_CACHE.get(key)
+    if cached is not None:
+        return cached
+    voice = PiperVoice.load(model_path=str(onnx_fp), config_path=str(json_fp))
+    _VOICE_OBJ_CACHE[key] = voice
+    return voice
 
 
 
@@ -138,8 +174,21 @@ def synthesize_to_wav(
     noise_w_scale: float = 3,
     speaker_id: Optional[int] = None,
     resample_hz: Optional[int] = None,
+    download_timeout: float | None = 30.0,
+    download_retries: int = 2,
+    verbose: bool = True,
 ) -> Path:
-    voice = load_voice(v, local_dir=local_dir)
+    t0 = time.time()
+    if verbose:
+        try:
+            pid = v.pretty_id
+        except Exception:
+            pid = f"{v.locale}/{v.voice}/{v.quality}"
+        print(f"[PIPER] Loading voice {pid} ...", flush=True)
+    voice = load_voice(v, local_dir=local_dir, timeout=download_timeout, retries=download_retries)
+    if verbose:
+        dt = time.time() - t0
+        print(f"[PIPER] Loaded voice in {dt:.2f}s", flush=True)
     cfg = SynthesisConfig(
         length_scale=length_scale,
         noise_scale=noise_scale,
@@ -151,6 +200,12 @@ def synthesize_to_wav(
     tmp_wav = out_wav if resample_hz is None else out_wav.with_suffix(".native.tmp.wav")
 
     # Stream chunks to WAV (AudioChunk exposes sample_rate/width/channels + int16 bytes)
+    if verbose:
+        short_text = (text[:120] + "…") if len(text) > 120 else text
+        print(f"[PIPER] Synth start (len={len(text)}): {short_text}", flush=True)
+    t1 = time.time()
+    chunks = 0
+    total_frames = 0
     with wave.open(str(tmp_wav), "wb") as wf:
         first = True
         for chunk in voice.synthesize(text, cfg):
@@ -160,6 +215,16 @@ def synthesize_to_wav(
                 wf.setframerate(chunk.sample_rate)      # e.g., 22050
                 first = False
             wf.writeframes(chunk.audio_int16_bytes)
+            chunks += 1
+            # 16-bit PCM -> 2 bytes per sample per channel
+            try:
+                total_frames += len(chunk.audio_int16_bytes) // (chunk.sample_width * chunk.sample_channels)
+            except Exception:
+                pass
+    if verbose:
+        t2 = time.time()
+        sec = total_frames / float(chunk.sample_rate) if chunks else 0.0
+        print(f"[PIPER] Synth done in {t2 - t1:.2f}s (chunks={chunks}, ~audio={sec:.2f}s)", flush=True)
 
     # Optional resample
     if resample_hz is not None:

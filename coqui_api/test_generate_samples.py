@@ -13,8 +13,8 @@ def main():
             resample_hz=None,  # avoid resample while testing stability
             max_models=3,
             seed=123,
-            prefer_models=["tts_models/en/ljspeech/vits", "tts_models/en/ljspeech/glow-tts", "blizzard2013/capacitron"],
-            avoid_models=["tts_models/en/ljspeech/tacotron2-DDC"],
+            prefer_models=["tts_models/en/ljspeech/vits", "tts_models/en/ljspeech/glow-tts"],
+            avoid_models=["tts_models/en/ljspeech/tacotron2-DDC", "blizzard2013/capacitron"],
             enable_speed=True,
         )
         print(f"Wrote {len(files)} files to {out}")
